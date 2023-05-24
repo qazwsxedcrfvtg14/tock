@@ -219,6 +219,13 @@ pub struct Platform {
             nrf52840::spi::SPIM,
         >,
     >,
+    aes: &'static capsules_extra::symmetric_encryption::aes::AesDriver<
+        'static,
+        capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<
+            'static,
+            nrf52840::aes::AesECB<'static>,
+        >,
+    >,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
 }
@@ -246,6 +253,8 @@ impl SyscallDriverLookup for Platform {
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             capsules_core::i2c_master_slave_driver::DRIVER_NUM => f(Some(self.i2c_master_slave)),
             capsules_core::spi_controller::DRIVER_NUM => f(Some(self.spi_controller)),
+            capsules_extra::symmetric_encryption::aes::DRIVER_NUM => f(Some(self.aes)),
+
             _ => f(None),
         }
     }
@@ -652,6 +661,24 @@ pub unsafe fn main() {
         nrf52840::acomp::Comparator
     ));
 
+    // AES Driver
+
+    let aes_driver_device = components::aes::AesVirtualComponent::new(aes_mux).finalize(
+        components::aes_virtual_component_static!(nrf52840::aes::AesECB<'static>),
+    );
+
+    let aes = components::aes::AesDriverComponent::new(
+        board_kernel,
+        capsules_extra::symmetric_encryption::aes::DRIVER_NUM,
+        aes_driver_device,
+    )
+    .finalize(components::aes_driver_component_static!(
+        capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<
+            'static,
+            nrf52840::aes::AesECB<'static>,
+        >
+    ));
+
     nrf52_components::NrfClockComponent::new(&base_peripherals.clock).finalize(());
 
     // let alarm_test_component =
@@ -715,6 +742,7 @@ pub unsafe fn main() {
         ),
         i2c_master_slave,
         spi_controller,
+        aes,
         scheduler,
         systick: cortexm4::systick::SysTick::new_with_calibration(64000000),
     };
