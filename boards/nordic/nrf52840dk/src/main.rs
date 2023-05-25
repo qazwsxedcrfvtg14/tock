@@ -740,6 +740,9 @@ pub unsafe fn main() {
     };
 
     let _ = platform.pconsole.start();
+
+    base_peripherals.adc.calibrate();
+
     debug!("Initialization complete. Entering main loop\r");
     debug!("{}", &nrf52840::ficr::FICR_INSTANCE);
 
