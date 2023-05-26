@@ -81,6 +81,7 @@ use capsules_extra::net::ipv6::ip_utils::IPAddr;
 use kernel::component::Component;
 use kernel::deferred_call::DeferredCallClient;
 use kernel::hil::i2c::{I2CMaster, I2CSlave};
+use kernel::hil::kv_system::KVSystem;
 use kernel::hil::led::LedLow;
 use kernel::hil::symmetric_encryption::AES128;
 use kernel::hil::time::Counter;
@@ -204,8 +205,8 @@ pub struct Platform {
             nrf52840::rtc::Rtc<'static>,
         >,
     >,
-    nonvolatile_storage:
-        &'static capsules_extra::nonvolatile_storage_driver::NonvolatileStorage<'static>,
+    // nonvolatile_storage:
+    //     &'static capsules_extra::nonvolatile_storage_driver::NonvolatileStorage<'static>,
     udp_driver: &'static capsules_extra::net::udp::UDPDriver<'static>,
     i2c_master_slave: &'static capsules_core::i2c_master_slave_driver::I2CMasterSlaveDriver<
         'static,
@@ -217,6 +218,24 @@ pub struct Platform {
             'static,
             nrf52840::spi::SPIM,
         >,
+    >,
+    kv_store: &'static capsules_extra::kv_store::KVStore<
+        'static,
+        capsules_extra::tickv::TicKVStore<
+            'static,
+            capsules_extra::mx25r6435f::MX25R6435F<
+                'static,
+                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+                    'static,
+                    nrf52840::spi::SPIM,
+                >,
+                nrf52840::gpio::GPIOPin<'static>,
+                VirtualMuxAlarm<'static, nrf52840::rtc::Rtc<'static>>,
+            >,
+            capsules_extra::sip_hash::SipHasher24<'static>,
+            4096,
+        >,
+        [u8; 8],
     >,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
@@ -238,9 +257,9 @@ impl SyscallDriverLookup for Platform {
             capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154_radio)),
             capsules_extra::temperature::DRIVER_NUM => f(Some(self.temp)),
             capsules_extra::analog_comparator::DRIVER_NUM => f(Some(self.analog_comparator)),
-            capsules_extra::nonvolatile_storage_driver::DRIVER_NUM => {
-                f(Some(self.nonvolatile_storage))
-            }
+            // capsules_extra::nonvolatile_storage_driver::DRIVER_NUM => {
+            //     f(Some(self.nonvolatile_storage))
+            // }
             capsules_extra::net::udp::DRIVER_NUM => f(Some(self.udp_driver)),
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             capsules_core::i2c_master_slave_driver::DRIVER_NUM => f(Some(self.i2c_master_slave)),
@@ -590,26 +609,120 @@ pub unsafe fn main() {
         nrf52840::rtc::Rtc
     ));
 
-    let nonvolatile_storage = components::nonvolatile_storage::NonvolatileStorageComponent::new(
-        board_kernel,
-        capsules_extra::nonvolatile_storage_driver::DRIVER_NUM,
-        mx25r6435f,
-        0x60000,   // Start address for userspace accessible region
-        0x3FA0000, // Length of userspace accessible region
-        0,         // Start address of kernel region
-        0x60000,   // Length of kernel region
-    )
-    .finalize(components::nonvolatile_storage_component_static!(
-        capsules_extra::mx25r6435f::MX25R6435F<
-            'static,
+    // let nonvolatile_storage = components::nonvolatile_storage::NonvolatileStorageComponent::new(
+    //     board_kernel,
+    //     capsules_extra::nonvolatile_storage_driver::DRIVER_NUM,
+    //     mx25r6435f,
+    //     0,         // Start address for userspace accessible region
+    //     0x3FA0000, // Length of userspace accessible region
+    //     0,         // Start address of kernel region
+    //     0x60000,   // Length of kernel region
+    // )
+    // .finalize(components::nonvolatile_storage_component_static!(
+    //     capsules_extra::mx25r6435f::MX25R6435F<
+    //         'static,
+    //         capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+    //             'static,
+    //             nrf52840::spi::SPIM,
+    //         >,
+    //         nrf52840::gpio::GPIOPin,
+    //         VirtualMuxAlarm<'static, nrf52840::rtc::Rtc>,
+    //     >
+    // ));
+
+    const SIZE: usize = core::mem::size_of::<
+        <capsules_extra::mx25r6435f::MX25R6435F<
             capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
                 'static,
                 nrf52840::spi::SPIM,
             >,
             nrf52840::gpio::GPIOPin,
             VirtualMuxAlarm<'static, nrf52840::rtc::Rtc>,
-        >
+        > as kernel::hil::flash::Flash>::Page,
+    >();
+
+    let page_buffer = static_init!(
+        <capsules_extra::mx25r6435f::MX25R6435F<
+            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+                'static,
+                nrf52840::spi::SPIM,
+            >,
+            nrf52840::gpio::GPIOPin,
+            VirtualMuxAlarm<'static, nrf52840::rtc::Rtc>,
+        > as kernel::hil::flash::Flash>::Page,
+        <capsules_extra::mx25r6435f::MX25R6435F<
+            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+                'static,
+                nrf52840::spi::SPIM,
+            >,
+            nrf52840::gpio::GPIOPin,
+            VirtualMuxAlarm<'static, nrf52840::rtc::Rtc>,
+        > as kernel::hil::flash::Flash>::Page::default()
+    );
+
+    // SipHash
+    let sip_hash = static_init!(
+        capsules_extra::sip_hash::SipHasher24,
+        capsules_extra::sip_hash::SipHasher24::new()
+    );
+    sip_hash.register();
+
+    let tickv = components::tickv::TicKVDedicatedFlashComponent::new(
+        sip_hash,
+        mx25r6435f,
+        0,        // start at the beginning of the flash chip
+        4096 * 3, // arbitrary size i chose
+        page_buffer,
+    )
+    .finalize(components::tickv_dedicated_flash_component_static!(
+        capsules_extra::mx25r6435f::MX25R6435F<
+            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+                'static,
+                nrf52840::spi::SPIM,
+            >,
+            nrf52840::gpio::GPIOPin,
+            VirtualMuxAlarm<'static, nrf52840::rtc::Rtc>,
+        >,
+        capsules_extra::sip_hash::SipHasher24,
+        SIZE,
     ));
+
+    let mux_kv = components::kv_system::KVStoreMuxComponent::new(tickv).finalize(
+        components::kv_store_mux_component_static!(
+            capsules_extra::tickv::TicKVStore<
+                capsules_extra::mx25r6435f::MX25R6435F<
+                    capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+                        'static,
+                        nrf52840::spi::SPIM,
+                    >,
+                    nrf52840::gpio::GPIOPin,
+                    VirtualMuxAlarm<'static, nrf52840::rtc::Rtc>,
+                >,
+                capsules_extra::sip_hash::SipHasher24<'static>,
+                SIZE,
+            >,
+            capsules_extra::tickv::TicKVKeyType,
+        ),
+    );
+
+    let kv_store = components::kv_system::KVStoreComponent::new(mux_kv).finalize(
+        components::kv_store_component_static!(
+            capsules_extra::tickv::TicKVStore<
+                capsules_extra::mx25r6435f::MX25R6435F<
+                    capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+                        'static,
+                        nrf52840::spi::SPIM,
+                    >,
+                    nrf52840::gpio::GPIOPin,
+                    VirtualMuxAlarm<'static, nrf52840::rtc::Rtc>,
+                >,
+                capsules_extra::sip_hash::SipHasher24<'static>,
+                SIZE,
+            >,
+            capsules_extra::tickv::TicKVKeyType,
+        ),
+    );
+    tickv.set_client(kv_store);
 
     let i2c_master_buffer = static_init!([u8; 32], [0; 32]);
     let i2c_slave_buffer1 = static_init!([u8; 32], [0; 32]);
@@ -690,6 +803,29 @@ pub unsafe fn main() {
     // ctap.enable();
     // ctap.attach();
 
+    let kv_key = static_init!([u8; 64], [0; 64]);
+    let kv_val = static_init!([u8; 64], [0; 64]);
+
+    kv_val[0] = 0xa2;
+    kv_val[1] = 0xa4;
+    kv_val[2] = 0xa6;
+    kv_val[3] = 0xa6;
+    kv_val[4] = 0xa8;
+    kv_val[5] = 0xaa;
+    kv_val[6] = 0xac;
+    kv_val[7] = 0xae;
+    kv_val[8] = 0xc2;
+    kv_val[9] = 0xc4;
+    kv_val[10] = 0xc6;
+    kv_val[11] = 0xc6;
+    kv_val[12] = 0xc8;
+    kv_val[13] = 0xca;
+    kv_val[14] = 0xcc;
+    kv_val[15] = 0xce;
+
+    let key_name: &[u8] = b"mythirdkey";
+    kv_key[0..10].clone_from_slice(&key_name);
+
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
         .finalize(components::round_robin_component_static!(NUM_PROCS));
 
@@ -705,7 +841,7 @@ pub unsafe fn main() {
         temp,
         alarm,
         analog_comparator,
-        nonvolatile_storage,
+        // nonvolatile_storage,
         udp_driver,
         ipc: kernel::ipc::IPC::new(
             board_kernel,
@@ -714,13 +850,23 @@ pub unsafe fn main() {
         ),
         i2c_master_slave,
         spi_controller,
+        kv_store,
         scheduler,
         systick: cortexm4::systick::SysTick::new_with_calibration(64000000),
     };
 
     let _ = platform.pconsole.start();
+
     debug!("Initialization complete. Entering main loop\r");
     debug!("{}", &nrf52840::ficr::FICR_INSTANCE);
+
+    // do a test write of a kv to tickv
+    kv_store
+        .set(kv_key, kv_val, 16, None)
+        .unwrap_or_else(|err| {
+            debug!("Error storing key");
+            debug!("{:?}", err);
+        });
 
     // alarm_test_component.run();
 
