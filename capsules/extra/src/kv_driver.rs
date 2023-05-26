@@ -119,7 +119,7 @@ impl<'a, K: kv_system::KVSystem<'a, K = T>, T: kv_system::KeyType> KVSystemDrive
                                                 .get_storage_permissions()
                                                 .ok_or(ErrorCode::INVAL)?;
                                             if let Err((data, dest, e)) =
-                                                self.kv.get(data_buffer, dest_buffer, perms)
+                                                self.kv.get(data_buffer, dest_buffer, Some(perms))
                                             {
                                                 self.data_buffer.replace(data);
                                                 self.dest_buffer.replace(dest);
@@ -182,7 +182,7 @@ impl<'a, K: kv_system::KVSystem<'a, K = T>, T: kv_system::KeyType> KVSystemDrive
                                                 data_buffer,
                                                 dest_buffer,
                                                 static_buffer_len,
-                                                perms,
+                                                Some(perms),
                                             ) {
                                                 self.data_buffer.replace(data);
                                                 self.dest_buffer.replace(dest);
@@ -219,7 +219,8 @@ impl<'a, K: kv_system::KVSystem<'a, K = T>, T: kv_system::KeyType> KVSystemDrive
                                     let perms = processid
                                         .get_storage_permissions()
                                         .ok_or(ErrorCode::INVAL)?;
-                                    if let Err((data, e)) = self.kv.delete(data_buffer, perms) {
+                                    if let Err((data, e)) = self.kv.delete(data_buffer, Some(perms))
+                                    {
                                         self.data_buffer.replace(data);
                                         return Err(e);
                                     }

@@ -133,7 +133,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
         &self,
         unhashed_key: &'static mut [u8],
         value: &'static mut [u8],
-        perms: StoragePermissions,
+        perms: Option<StoragePermissions>,
     ) -> Result<(), (&'static mut [u8], &'static mut [u8], Result<(), ErrorCode>)> {
         if self.mux_kv.operation.is_none() {
             if self.hashed_key.is_none() {
@@ -141,7 +141,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
             }
 
             self.mux_kv.operation.set(Operation::Get);
-            self.valid_ids.set(perms);
+            self.valid_ids.insert(perms);
 
             if let Some(Err((unhashed_key, e))) = self.hashed_key.take().map(|buf| {
                 if let Err((unhashed_key, hashed_key, e)) =
@@ -166,7 +166,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
                 self.next_operation.set(Operation::Get);
                 self.unhashed_key.replace(unhashed_key);
                 self.value.replace(value);
-                self.next_valid_ids.set(perms);
+                self.next_valid_ids.insert(perms);
 
                 Ok(())
             } else {
@@ -180,11 +180,11 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
         unhashed_key: &'static mut [u8],
         value: &'static mut [u8],
         length: usize,
-        perms: StoragePermissions,
+        perms: Option<StoragePermissions>,
     ) -> Result<(), (&'static mut [u8], &'static mut [u8], Result<(), ErrorCode>)> {
-        let write_id = match perms.get_write_id() {
+        let write_id = match perms.map_or(None, |p| p.get_write_id()) {
             Some(write_id) => write_id,
-            None => return Err((unhashed_key, value, Err(ErrorCode::INVAL))),
+            None => 0,
         };
 
         // Create the Tock header and ensure we have space to fit it
@@ -241,14 +241,14 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
     pub fn delete(
         &self,
         unhashed_key: &'static mut [u8],
-        perms: StoragePermissions,
+        perms: Option<StoragePermissions>,
     ) -> Result<(), (&'static mut [u8], Result<(), ErrorCode>)> {
         if self.mux_kv.operation.is_none() {
             if self.hashed_key.is_none() {
                 return Err((unhashed_key, Err(ErrorCode::NOMEM)));
             }
 
-            self.valid_ids.set(perms);
+            self.valid_ids.insert(perms);
 
             self.mux_kv.operation.set(Operation::Delete);
 
@@ -272,7 +272,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
             if self.next_operation.is_none() {
                 self.next_operation.set(Operation::Delete);
                 self.unhashed_key.replace(unhashed_key);
-                self.next_valid_ids.set(perms);
+                self.next_valid_ids.insert(perms);
 
                 Ok(())
             } else {
@@ -411,9 +411,9 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType + core::fmt::Debug> kv_sy
                 let header = KeyHeader::new_from_buf(ret_buf);
 
                 if header.version == HEADER_VERSION {
-                    self.valid_ids.map(|perms| {
-                        access_allowed = perms.check_write_permission(header.write_id);
-                    });
+                    access_allowed = self
+                        .valid_ids
+                        .map_or(true, |perms| perms.check_write_permission(header.write_id));
                 }
 
                 self.header_value.replace(ret_buf);
@@ -444,9 +444,9 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType + core::fmt::Debug> kv_sy
                     let header = KeyHeader::new_from_buf(ret_buf);
 
                     if header.version == HEADER_VERSION {
-                        self.valid_ids.map(|perms| {
-                            read_allowed = perms.check_read_permission(header.write_id);
-                        });
+                        read_allowed = self
+                            .valid_ids
+                            .map_or(true, |perms| perms.check_read_permission(header.write_id));
 
                         if read_allowed {
                             ret_buf.copy_within(
