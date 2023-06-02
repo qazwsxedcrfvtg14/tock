@@ -414,7 +414,9 @@ impl<'a, I: i2c::I2CMaster<'a>, S: i2c::SMBusMaster<'a>> i2c::I2CDevice for SMBu
     }
 }
 
-impl<'a, I: i2c::I2CMaster<'a>, S: i2c::SMBusMaster<'a>> i2c::SMBusDevice for SMBusDevice<'a, I, S> {
+impl<'a, I: i2c::I2CMaster<'a>, S: i2c::SMBusMaster<'a>> i2c::SMBusDevice
+    for SMBusDevice<'a, I, S>
+{
     fn smbus_write_read(
         &self,
         data: &'static mut [u8],

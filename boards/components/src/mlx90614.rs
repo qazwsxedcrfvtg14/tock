@@ -48,7 +48,9 @@ pub struct Mlx90614SMBusComponent<
     driver_num: usize,
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>, S: 'static + i2c::SMBusMaster<'static>> Mlx90614SMBusComponent<I, S> {
+impl<I: 'static + i2c::I2CMaster<'static>, S: 'static + i2c::SMBusMaster<'static>>
+    Mlx90614SMBusComponent<I, S>
+{
     pub fn new(
         i2c: &'static MuxI2C<'static, I, S>,
         i2c_address: u8,

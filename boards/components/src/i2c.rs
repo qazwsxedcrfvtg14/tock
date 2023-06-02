@@ -44,12 +44,17 @@ macro_rules! i2c_component_static {
     };};
 }
 
-pub struct I2CMuxComponent<I: 'static + i2c::I2CMaster<'static>, S: 'static + i2c::SMBusMaster<'static> = NoSMBus> {
+pub struct I2CMuxComponent<
+    I: 'static + i2c::I2CMaster<'static>,
+    S: 'static + i2c::SMBusMaster<'static> = NoSMBus,
+> {
     i2c: &'static I,
     smbus: Option<&'static S>,
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>, S: 'static + i2c::SMBusMaster<'static>> I2CMuxComponent<I, S> {
+impl<I: 'static + i2c::I2CMaster<'static>, S: 'static + i2c::SMBusMaster<'static>>
+    I2CMuxComponent<I, S>
+{
     pub fn new(i2c: &'static I, smbus: Option<&'static S>) -> Self {
         I2CMuxComponent { i2c, smbus }
     }

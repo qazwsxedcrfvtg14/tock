@@ -66,7 +66,9 @@ impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> SHT3xCom
     }
 }
 
-impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Component for SHT3xComponent<A, I> {
+impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Component
+    for SHT3xComponent<A, I>
+{
     type StaticInput = (
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, A>>,
         &'static mut MaybeUninit<I2CDevice<'static, I>>,

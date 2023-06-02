@@ -76,7 +76,9 @@ impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Bmp280Co
     }
 }
 
-impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Component for Bmp280Component<A, I> {
+impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Component
+    for Bmp280Component<A, I>
+{
     type StaticInput = (
         &'static mut MaybeUninit<I2CDevice<'static, I>>,
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, A>>,
