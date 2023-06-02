@@ -14,7 +14,6 @@
 #![test_runner(test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
-use crate::hil::symmetric_encryption::AES128_BLOCK_SIZE;
 use crate::otbn::OtbnComponent;
 use capsules_core::virtualizers::virtual_aes_ccm;
 use capsules_core::virtualizers::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
@@ -630,11 +629,6 @@ unsafe fn setup() -> (
     );
     entropy_to_random.set_client(rng);
 
-    const CRYPT_SIZE: usize = 7 * AES128_BLOCK_SIZE;
-
-    let aes_source_buffer = static_init!([u8; 16], [0; 16]);
-    let aes_dest_buffer = static_init!([u8; CRYPT_SIZE], [0; CRYPT_SIZE]);
-
     let ccm_mux = static_init!(
         virtual_aes_ccm::MuxAES128CCM<'static, earlgrey::aes::Aes<'static>>,
         virtual_aes_ccm::MuxAES128CCM::new(&peripherals.aes)
@@ -642,29 +636,21 @@ unsafe fn setup() -> (
     kernel::deferred_call::DeferredCallClient::register(ccm_mux);
     peripherals.aes.set_client(ccm_mux);
 
-    let crypt_buf1 = static_init!([u8; CRYPT_SIZE], [0x00; CRYPT_SIZE]);
-    let ccm_client1 = static_init!(
-        virtual_aes_ccm::VirtualAES128CCM<'static, earlgrey::aes::Aes<'static>>,
-        virtual_aes_ccm::VirtualAES128CCM::new(ccm_mux, crypt_buf1)
+    let ccm_client1 = components::aes::AesVirtualComponent::new(ccm_mux).finalize(
+        components::aes_virtual_component_static!(earlgrey::aes::Aes<'static>),
     );
-    ccm_client1.setup();
-    // ccm_mux.set_client(ccm_client1);
 
-    let aes = static_init!(
-        capsules_extra::symmetric_encryption::aes::AesDriver<
+    let aes = components::aes::AesDriverComponent::new(
+        board_kernel,
+        capsules_extra::symmetric_encryption::aes::DRIVER_NUM,
+        ccm_client1,
+    )
+    .finalize(components::aes_driver_component_static!(
+        capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<
             'static,
-            virtual_aes_ccm::VirtualAES128CCM<'static, earlgrey::aes::Aes<'static>>,
-        >,
-        capsules_extra::symmetric_encryption::aes::AesDriver::new(
-            ccm_client1,
-            aes_source_buffer,
-            aes_dest_buffer,
-            board_kernel.create_grant(
-                capsules_extra::symmetric_encryption::aes::DRIVER_NUM,
-                &memory_allocation_cap
-            )
-        )
-    );
+            earlgrey::aes::Aes<'static>,
+        >
+    ));
 
     AES = Some(ccm_client1);
 
