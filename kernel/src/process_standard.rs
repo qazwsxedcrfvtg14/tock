@@ -518,12 +518,12 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
         let (read_count, read_storage_ids) = self
             .header
             .get_persistent_acl_read_ids()
-            .unwrap_or((0, [0; 8]));
+            .unwrap_or((0, [core::num::NonZeroU32::new(1).unwrap(); 8]));
 
         let (access_count, access_storage_ids) = self
             .header
             .get_persistent_acl_access_ids()
-            .unwrap_or((0, [0; 8]));
+            .unwrap_or((0, [core::num::NonZeroU32::new(1).unwrap(); 8]));
 
         let write_id = self.header.get_persistent_acl_write_id();
 
