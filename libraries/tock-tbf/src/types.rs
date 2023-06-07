@@ -227,11 +227,11 @@ pub struct TbfHeaderV2Permissions<const L: usize> {
 /// A list of persistent access permissions
 #[derive(Clone, Copy, Debug)]
 pub struct TbfHeaderV2PersistentAcl<const L: usize> {
-    write_id: u32,
+    write_id: Option<core::num::NonZeroU32>,
     read_length: u16,
-    read_ids: [u32; L],
+    read_ids: [core::num::NonZeroU32; L],
     access_length: u16,
-    access_ids: [u32; L],
+    access_ids: [core::num::NonZeroU32; L],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -518,11 +518,11 @@ impl<const L: usize> core::convert::TryFrom<&[u8]> for TbfHeaderV2PersistentAcl<
     fn try_from(b: &[u8]) -> Result<TbfHeaderV2PersistentAcl<L>, Self::Error> {
         let mut read_end = 6;
 
-        let write_id = u32::from_le_bytes(
+        let write_id = core::num::NonZeroU32::new(u32::from_le_bytes(
             b.get(0..4)
                 .ok_or(TbfParseError::NotEnoughFlash)?
                 .try_into()?,
-        );
+        ));
 
         let read_length = u16::from_le_bytes(
             b.get(4..6)
@@ -530,16 +530,28 @@ impl<const L: usize> core::convert::TryFrom<&[u8]> for TbfHeaderV2PersistentAcl<
                 .try_into()?,
         );
 
-        let mut read_ids: [u32; L] = [0; L];
+        let mut read_id_idx: u16 = 0;
+        let mut read_ids: [core::num::NonZeroU32; L] = [core::num::NonZeroU32::new(1).unwrap(); L];
         for i in 0..read_length as usize {
             let start = 6 + (i * size_of::<u32>());
             read_end = start + size_of::<u32>();
-            if let Some(read_id) = read_ids.get_mut(i) {
-                *read_id = u32::from_le_bytes(
+            if let Some(read_id) = read_ids.get_mut(read_id_idx as usize) {
+                let parsed_read_id = u32::from_le_bytes(
                     b.get(start..read_end as usize)
                         .ok_or(TbfParseError::NotEnoughFlash)?
                         .try_into()?,
                 );
+
+                // ACL ID is reserved.
+                match core::num::NonZeroU32::new(parsed_read_id) {
+                    Some(read_id_nonzero) => {
+                        *read_id = read_id_nonzero;
+                        read_id_idx += 1;
+                    }
+                    None => {
+                        // skip
+                    }
+                }
             } else {
                 return Err(TbfParseError::BadTlvEntry(
                     TbfHeaderTypes::TbfHeaderPersistentAcl as usize,
@@ -553,16 +565,29 @@ impl<const L: usize> core::convert::TryFrom<&[u8]> for TbfHeaderV2PersistentAcl<
                 .try_into()?,
         );
 
-        let mut access_ids: [u32; L] = [0; L];
+        let mut access_id_idx: u16 = 0;
+        let mut access_ids: [core::num::NonZeroU32; L] =
+            [core::num::NonZeroU32::new(1).unwrap(); L];
         for i in 0..access_length as usize {
             let start = read_end + 2 + (i * size_of::<u32>());
             let access_end = start + size_of::<u32>();
-            if let Some(access_id) = access_ids.get_mut(i) {
-                *access_id = u32::from_le_bytes(
+            if let Some(access_id) = access_ids.get_mut(access_id_idx as usize) {
+                let parsed_access_id = u32::from_le_bytes(
                     b.get(start..access_end as usize)
                         .ok_or(TbfParseError::NotEnoughFlash)?
                         .try_into()?,
                 );
+
+                // ACL ID is reserved.
+                match core::num::NonZeroU32::new(parsed_access_id) {
+                    Some(access_id_nonzero) => {
+                        *access_id = access_id_nonzero;
+                        access_id_idx += 1;
+                    }
+                    None => {
+                        // skip
+                    }
+                }
             } else {
                 return Err(TbfParseError::BadTlvEntry(
                     TbfHeaderTypes::TbfHeaderPersistentAcl as usize,
@@ -572,9 +597,9 @@ impl<const L: usize> core::convert::TryFrom<&[u8]> for TbfHeaderV2PersistentAcl<
 
         Ok(TbfHeaderV2PersistentAcl {
             write_id,
-            read_length,
+            read_length: read_id_idx,
             read_ids,
-            access_length,
+            access_length: access_id_idx,
             access_ids,
         })
     }
@@ -877,10 +902,10 @@ impl TbfHeader {
 
     /// Get the process `write_id`.
     /// Returns `None` if a `write_id` is not included.
-    pub fn get_persistent_acl_write_id(&self) -> Option<u32> {
+    pub fn get_persistent_acl_write_id(&self) -> Option<core::num::NonZeroU32> {
         match self {
             TbfHeader::TbfHeaderV2(hd) => match hd.persistent_acls {
-                Some(persistent_acls) => Some(persistent_acls.write_id),
+                Some(persistent_acls) => persistent_acls.write_id,
                 _ => None,
             },
             _ => None,
@@ -889,7 +914,9 @@ impl TbfHeader {
 
     /// Get the number of valid `read_ids` and the `read_ids`.
     /// Returns `None` if a `read_ids` is not included.
-    pub fn get_persistent_acl_read_ids(&self) -> Option<(usize, [u32; NUM_PERSISTENT_ACLS])> {
+    pub fn get_persistent_acl_read_ids(
+        &self,
+    ) -> Option<(usize, [core::num::NonZeroU32; NUM_PERSISTENT_ACLS])> {
         match self {
             TbfHeader::TbfHeaderV2(hd) => match hd.persistent_acls {
                 Some(persistent_acls) => {
@@ -903,7 +930,9 @@ impl TbfHeader {
 
     /// Get the number of valid `access_ids` and the `access_ids`.
     /// Returns `None` if a `access_ids` is not included.
-    pub fn get_persistent_acl_access_ids(&self) -> Option<(usize, [u32; NUM_PERSISTENT_ACLS])> {
+    pub fn get_persistent_acl_access_ids(
+        &self,
+    ) -> Option<(usize, [core::num::NonZeroU32; NUM_PERSISTENT_ACLS])> {
         match self {
             TbfHeader::TbfHeaderV2(hd) => match hd.persistent_acls {
                 Some(persistent_acls) => Some((
