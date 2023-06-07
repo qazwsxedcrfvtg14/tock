@@ -724,6 +724,12 @@ pub unsafe fn main() {
     );
     tickv.set_client(kv_store);
 
+    // Get permissions we can use.
+    let superuser_storage_capability = create_capability!(capabilities::SuperuserStorageCapability);
+    let kv_permissions = kernel::storage_permissions::StoragePermissions::new_kernel_permissions(
+        &superuser_storage_capability,
+    );
+
     let i2c_master_buffer = static_init!([u8; 32], [0; 32]);
     let i2c_slave_buffer1 = static_init!([u8; 32], [0; 32]);
     let i2c_slave_buffer2 = static_init!([u8; 32], [0; 32]);
@@ -862,7 +868,7 @@ pub unsafe fn main() {
 
     // do a test write of a kv to tickv
     kv_store
-        .set(kv_key, kv_val, 16, None)
+        .set(kv_key, kv_val, 16, kv_permissions)
         .unwrap_or_else(|err| {
             debug!("Error storing key");
             debug!("{:?}", err);
