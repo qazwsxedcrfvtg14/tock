@@ -670,8 +670,8 @@ pub unsafe fn main() {
     let tickv = components::tickv::TicKVDedicatedFlashComponent::new(
         sip_hash,
         mx25r6435f,
-        0,        // start at the beginning of the flash chip
-        4096 * 3, // arbitrary size i chose
+        0,         // start at the beginning of the flash chip
+        4096 * 32, // arbitrary size i chose
         page_buffer,
     )
     .finalize(components::tickv_dedicated_flash_component_static!(
