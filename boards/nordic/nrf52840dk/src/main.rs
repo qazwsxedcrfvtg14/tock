@@ -135,6 +135,10 @@ const DEFAULT_CTX_PREFIX: [u8; 16] = [0x0 as u8; 16]; //Context for 6LoWPAN Comp
 /// Debug Writer
 pub mod io;
 
+// Unit Tests for drivers.
+#[allow(dead_code)]
+mod test;
+
 // Whether to use UART debugging or Segger RTT (USB) debugging.
 // - Set to false to use UART.
 // - Set to true to use Segger RTT over USB.
@@ -719,6 +723,7 @@ pub unsafe fn main() {
     debug!("{}", &nrf52840::ficr::FICR_INSTANCE);
 
     // alarm_test_component.run();
+    test::hmac_sha256_test::run_hmacsha256();
 
     // These symbols are defined in the linker script.
     extern "C" {
