@@ -5,11 +5,8 @@
 //! Software implementation of HMAC-SHA256.
 
 use core::cell::Cell;
-// use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 
 use kernel::hil;
-// use kernel::hil::digest::Sha256;
-// use kernel::hil::digest::{Digest, DigestData, DigestHash, DigestVerify};
 use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
 use kernel::utilities::leasable_buffer::LeasableBuffer;
 use kernel::utilities::leasable_buffer::LeasableBufferDynamic;
@@ -19,7 +16,7 @@ use kernel::ErrorCode;
 #[derive(Clone, Copy, PartialEq)]
 pub enum State {
     Idle,
-    InnerHashKeyPending,
+    InnerHashAddKeyPending,
     InnerHashAddKey,
     InnerHashAddData,
     InnerHash,
@@ -30,7 +27,6 @@ pub enum State {
 
 const SHA_BLOCK_LEN_BYTES: usize = 64;
 const SHA_256_OUTPUT_LEN_BYTES: usize = 32;
-const NUM_ROUND_CONSTANTS: usize = 64;
 
 pub struct HmacSha256Software<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> {
     sha256: &'a S,
@@ -43,18 +39,13 @@ pub struct HmacSha256Software<'a, S: hil::digest::Sha256 + hil::digest::DigestDa
 
     data_buffer: TakeCell<'static, [u8]>,
     key_buffer: MapCell<[u8; SHA_BLOCK_LEN_BYTES]>,
-    buffered_length: Cell<usize>,
-    total_length: Cell<usize>,
 
     digest_buffer: MapCell<&'static mut [u8; 32]>,
-
-    // Used to store the hash or the hash to compare against with verify
-    output_data: Cell<Option<&'static mut [u8; SHA_256_OUTPUT_LEN_BYTES]>>,
 }
 
 impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> HmacSha256Software<'a, S> {
     pub fn new(sha256: &'a S, data_buffer: &'static mut [u8]) -> Self {
-        let s = Self {
+        Self {
             sha256,
 
             state: Cell::new(State::Idle),
@@ -63,17 +54,9 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> HmacSha25
             input_data: OptionalCell::empty(),
             data_buffer: TakeCell::new(data_buffer),
             key_buffer: MapCell::new([0; SHA_BLOCK_LEN_BYTES]),
-            buffered_length: Cell::new(0),
-            total_length: Cell::new(0),
 
             digest_buffer: MapCell::empty(),
-
-            output_data: Cell::new(None),
-            // hash_values: Cell::new([0; 8]),
-            // deferred_call: DeferredCall::new(),
-        };
-        // s.initialize();
-        s
+        }
     }
 }
 
@@ -84,40 +67,13 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>>
         &self,
         data: LeasableBuffer<'static, u8>,
     ) -> Result<(), (ErrorCode, LeasableBuffer<'static, u8>)> {
-        // if self.busy() {
-        //     Err((ErrorCode::BUSY, data))
-        // } else {
-        //     self.state.set(State::Data);
-        //     self.deferred_call.set();
-        //     self.input_data.set(LeasableBufferDynamic::Immutable(data));
-        //     self.compute_sha256();
-        //     Ok(())
-        // }
-
-        self.sha256.add_data(data)
-    }
-
-    fn add_mut_data(
-        &self,
-        data: LeasableMutableBuffer<'static, u8>,
-    ) -> Result<(), (ErrorCode, LeasableMutableBuffer<'static, u8>)> {
-        // if self.busy() {
-        //     Err((ErrorCode::BUSY, data))
-        // } else {
-        //     self.state.set(State::Data);
-        //     self.deferred_call.set();
-        //     self.input_data.set(LeasableBufferDynamic::Mutable(data));
-        //     self.compute_sha256();
-        //     Ok(())
-
-        // self.sha256.add_mut_data(data)
-
         match self.state.get() {
-            State::InnerHashKeyPending => {
+            State::InnerHashAddKeyPending => {
                 // We need to write the key before we write the data.
 
                 if let Some(key_buf) = self.key_buffer.take() {
                     if let Some(data_buf) = self.data_buffer.take() {
+                        // Copy the key XOR with inner pad (0x36).
                         for i in 0..64 {
                             data_buf[i] = key_buf[i] ^ 0x36;
                         }
@@ -126,13 +82,19 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>>
                         let mut lease_buf = LeasableMutableBuffer::new(data_buf);
                         lease_buf.slice(0..64);
 
-                        kernel::debug!("set inner key");
-
-                        self.input_data.set(LeasableBufferDynamic::Mutable(data));
-                        // self.input_data.set(lease_buf);
-                        self.state.set(State::InnerHashAddKey);
-
-                        self.sha256.add_mut_data(lease_buf)
+                        match self.sha256.add_mut_data(lease_buf) {
+                            Ok(()) => {
+                                self.state.set(State::InnerHashAddKey);
+                                // Save the incoming data to add to the hasher
+                                // on the next iteration.
+                                self.input_data.set(LeasableBufferDynamic::Immutable(data));
+                                Ok(())
+                            }
+                            Err((e, leased_data_buf)) => {
+                                self.data_buffer.replace(leased_data_buf.take());
+                                Err((e, data))
+                            }
+                        }
                     } else {
                         Err((ErrorCode::FAIL, data))
                     }
@@ -141,14 +103,91 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>>
                 }
             }
 
-            _ => self.sha256.add_mut_data(data),
-        }
+            State::InnerHashAddData => {
+                // In this state the hasher is ready to take more input data so
+                // we can provide more input data. This is the only state after
+                // setting the key we can accept new data in.
+                self.sha256.add_data(data)
+            }
 
-        // }
+            State::Idle => {
+                // We need a key before we can accept data, so we must return
+                // error here. `OFF` is the closest error to this issue so we
+                // return that.
+                Err((ErrorCode::OFF, data))
+            }
+
+            _ => {
+                // Any other state we cannot accept new data.
+                Err((ErrorCode::BUSY, data))
+            }
+        }
+    }
+
+    fn add_mut_data(
+        &self,
+        data: LeasableMutableBuffer<'static, u8>,
+    ) -> Result<(), (ErrorCode, LeasableMutableBuffer<'static, u8>)> {
+        match self.state.get() {
+            State::InnerHashAddKeyPending => {
+                // We need to write the key before we write the data.
+
+                if let Some(key_buf) = self.key_buffer.take() {
+                    if let Some(data_buf) = self.data_buffer.take() {
+                        // Copy the key XOR with inner pad (0x36).
+                        for i in 0..64 {
+                            data_buf[i] = key_buf[i] ^ 0x36;
+                        }
+                        self.key_buffer.replace(key_buf);
+
+                        let mut lease_buf = LeasableMutableBuffer::new(data_buf);
+                        lease_buf.slice(0..64);
+
+                        match self.sha256.add_mut_data(lease_buf) {
+                            Ok(()) => {
+                                self.state.set(State::InnerHashAddKey);
+                                // Save the incoming data to add to the hasher
+                                // on the next iteration.
+                                self.input_data.set(LeasableBufferDynamic::Mutable(data));
+                                Ok(())
+                            }
+                            Err((e, leased_data_buf)) => {
+                                self.data_buffer.replace(leased_data_buf.take());
+                                Err((e, data))
+                            }
+                        }
+                    } else {
+                        Err((ErrorCode::FAIL, data))
+                    }
+                } else {
+                    Err((ErrorCode::FAIL, data))
+                }
+            }
+
+            State::InnerHashAddData => {
+                // In this state the hasher is ready to take more input data so
+                // we can provide more input data. This is the only state after
+                // setting the key we can accept new data in.
+                self.sha256.add_mut_data(data)
+            }
+
+            State::Idle => {
+                // We need a key before we can accept data, so we must return
+                // error here. `OFF` is the closest error to this issue so we
+                // return that.
+                Err((ErrorCode::OFF, data))
+            }
+
+            _ => {
+                // Any other state we cannot accept new data.
+                Err((ErrorCode::BUSY, data))
+            }
+        }
     }
 
     fn clear_data(&self) {
-        // self.initialize();
+        self.state.set(State::Idle);
+        self.sha256.clear_data();
     }
 }
 
@@ -183,23 +222,6 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>>
     }
 }
 
-// impl<'a> DigestVerify<'a, 32> for Sha256Software<'a> {
-//     fn verify(
-//         &'a self,
-//         compare: &'static mut [u8; 32],
-//     ) -> Result<(), (ErrorCode, &'static mut [u8; 32])> {
-//         if self.busy() {
-//             Err((ErrorCode::BUSY, compare))
-//         } else {
-//             self.state.set(State::Verify);
-//             self.complete_sha256();
-//             self.output_data.set(Some(compare));
-//             self.deferred_call.set();
-//             Ok(())
-//         }
-//     }
-// }
-
 impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>>
     hil::digest::DigestDataHash<'a, 32> for HmacSha256Software<'a, S>
 {
@@ -222,36 +244,16 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::dige
             State::InnerHashAddKey => {
                 self.data_buffer.replace(data.take());
 
-                // self.state.set(State::InnerHash);
+                // We just added the key, so we can now add the stored data.
                 self.state.set(State::InnerHashAddData);
-
                 self.input_data.take().map(|in_data| match in_data {
                     LeasableBufferDynamic::Mutable(buffer) => {
-                        kernel::debug!("add buffer data {}", buffer.len());
                         self.sha256.add_mut_data(buffer);
                     }
                     LeasableBufferDynamic::Immutable(buffer) => {
                         self.sha256.add_data(buffer);
                     }
                 });
-
-                // self.state.set(State::Idle);
-                // match data {
-                //     LeasableBufferDynamic::Mutable(buffer) => {
-                //         self.client.map(|client| {
-                //             client.add_mut_data_done(Ok(()), buffer);
-                //         });
-                //     }
-                //     LeasableBufferDynamic::Immutable(buffer) => {
-                //         self.client.map(|client| {
-                //             client.add_data_done(Ok(()), buffer);
-                //         });
-                //     }
-                // }
-
-                // self.digest_buffer.take().map(|digest_buf| {
-                //     self.sha256.run(digest_buf);
-                // });
             }
             State::OuterHashAddKey => {
                 self.digest_buffer.map(|digest_buf| {
@@ -337,30 +339,20 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::dige
             Err(ErrorCode::SIZE)
         } else {
             self.key_buffer.map_or(Err(ErrorCode::FAIL), |key_buf| {
-                // self.data_buffer
-                //     .take()
-                //     .map_or(Err(ErrorCode::FAIL), |data_buf| {
+                // Save the key in our key buffer.
                 for i in 0..64 {
                     key_buf[i] = *key.get(i).unwrap_or(&0);
-
-                    // data_buf[i] = key_buf[i] ^ 0x36;
                 }
 
-                kernel::debug!("set key");
-                self.state.set(State::InnerHashKeyPending);
-
-                // let mut lease_buf = LeasableMutableBuffer::new(data_buf);
-                // lease_buf.slice(0..64);
-
-                // self.sha256.add_mut_data(lease_buf);
+                // Mark that we have the key pending which we can add once we
+                // get additional data to add. We can't add the key in the
+                // underlying hash now because we don't have a callback to use,
+                // so we have to just store the key. We need to use the key
+                // again anyway, so this is ok.
+                self.state.set(State::InnerHashAddKeyPending);
                 Ok(())
-                // })
             })
-            // let mut lease_buf =
-            //     LeasableMutableBuffer::new(self.data_buffer.take().unwrap());
         }
-
-        // Ok(())
     }
 }
 
