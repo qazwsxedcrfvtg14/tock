@@ -77,7 +77,9 @@ register_bitfields![u32,
 
 pub struct Hmac<'a> {
     registers: StaticRef<HmacRegisters>,
-    client: OptionalCell<&'a dyn hil::digest::Client<32>>,
+    client_data: OptionalCell<&'a dyn hil::digest::ClientData<32>>,
+    client_hash: OptionalCell<&'a dyn hil::digest::ClientHash<32>>,
+    client_verify: OptionalCell<&'a dyn hil::digest::ClientVerify<32>>,
     data: Cell<Option<LeasableBufferDynamic<'static, u8>>>,
     verify: Cell<bool>,
     digest: Cell<Option<&'static mut [u8; 32]>>,
@@ -89,7 +91,9 @@ impl Hmac<'_> {
     pub fn new(base: StaticRef<HmacRegisters>) -> Self {
         Hmac {
             registers: base,
-            client: OptionalCell::empty(),
+            client_data: OptionalCell::empty(),
+            client_hash: OptionalCell::empty(),
+            client_verify: OptionalCell::empty(),
             data: Cell::new(None),
             verify: Cell::new(false),
             digest: Cell::new(None),
@@ -163,59 +167,65 @@ impl Hmac<'_> {
         );
         self.busy.set(false);
         if intrs.is_set(INTR_STATE::HMAC_DONE) {
-            self.client.map(|client| {
-                let digest = self.digest.take().unwrap();
+            let digest = self.digest.take().unwrap();
 
-                regs.intr_state.modify(INTR_STATE::HMAC_DONE::SET);
+            regs.intr_state.modify(INTR_STATE::HMAC_DONE::SET);
 
-                if self.verify.get() {
-                    let mut equal = true;
+            if self.verify.get() {
+                let mut equal = true;
 
-                    for i in 0..8 {
-                        let d = regs.digest[i].get().to_ne_bytes();
+                for i in 0..8 {
+                    let d = regs.digest[i].get().to_ne_bytes();
 
-                        let idx = i * 4;
+                    let idx = i * 4;
 
-                        if digest[idx + 0] != d[0]
-                            || digest[idx + 1] != d[1]
-                            || digest[idx + 2] != d[2]
-                            || digest[idx + 3] != d[3]
-                        {
-                            equal = false;
-                        }
-                    }
-
-                    if self.cancelled.get() {
-                        self.clear_data();
-                        self.cancelled.set(false);
-                        client.verification_done(Err(ErrorCode::CANCEL), digest);
-                    } else {
-                        self.clear_data();
-                        self.cancelled.set(false);
-                        client.verification_done(Ok(equal), digest);
-                    }
-                } else {
-                    for i in 0..8 {
-                        let d = regs.digest[i].get().to_ne_bytes();
-
-                        let idx = i * 4;
-
-                        digest[idx + 0] = d[0];
-                        digest[idx + 1] = d[1];
-                        digest[idx + 2] = d[2];
-                        digest[idx + 3] = d[3];
-                    }
-                    if self.cancelled.get() {
-                        self.clear_data();
-                        self.cancelled.set(false);
-                        client.hash_done(Err(ErrorCode::CANCEL), digest);
-                    } else {
-                        self.clear_data();
-                        self.cancelled.set(false);
-                        client.hash_done(Ok(()), digest);
+                    if digest[idx + 0] != d[0]
+                        || digest[idx + 1] != d[1]
+                        || digest[idx + 2] != d[2]
+                        || digest[idx + 3] != d[3]
+                    {
+                        equal = false;
                     }
                 }
-            });
+
+                if self.cancelled.get() {
+                    self.clear_data();
+                    self.cancelled.set(false);
+                    self.client_verify.map(|client| {
+                        client.verification_done(Err(ErrorCode::CANCEL), digest);
+                    });
+                } else {
+                    self.clear_data();
+                    self.cancelled.set(false);
+                    self.client_verify.map(|client| {
+                        client.verification_done(Ok(equal), digest);
+                    });
+                }
+            } else {
+                for i in 0..8 {
+                    let d = regs.digest[i].get().to_ne_bytes();
+
+                    let idx = i * 4;
+
+                    digest[idx + 0] = d[0];
+                    digest[idx + 1] = d[1];
+                    digest[idx + 2] = d[2];
+                    digest[idx + 3] = d[3];
+                }
+                if self.cancelled.get() {
+                    self.clear_data();
+                    self.cancelled.set(false);
+                    self.client_hash.map(|client| {
+                        client.hash_done(Err(ErrorCode::CANCEL), digest);
+                    });
+                } else {
+                    self.clear_data();
+                    self.cancelled.set(false);
+                    self.client_hash.map(|client| {
+                        client.hash_done(Ok(()), digest);
+                    });
+                }
+            }
         } else if intrs.is_set(INTR_STATE::FIFO_EMPTY) {
             // Clear the FIFO empty interrupt
             regs.intr_state.modify(INTR_STATE::FIFO_EMPTY::SET);
@@ -227,7 +237,7 @@ impl Hmac<'_> {
             };
             if self.data_progress() == false {
                 // False means we are done
-                self.client.map(move |client| {
+                self.client_data.map(move |client| {
                     self.data.take().map(|buf| match buf {
                         LeasableBufferDynamic::Mutable(b) => client.add_mut_data_done(rval, b),
                         LeasableBufferDynamic::Immutable(b) => client.add_data_done(rval, b),
@@ -243,7 +253,7 @@ impl Hmac<'_> {
         } else if intrs.is_set(INTR_STATE::HMAC_ERR) {
             regs.intr_state.modify(INTR_STATE::HMAC_ERR::SET);
 
-            self.client.map(|client| {
+            self.client_hash.map(|client| {
                 let errval = if self.cancelled.get() {
                     self.cancelled.set(false);
                     ErrorCode::CANCEL
@@ -261,6 +271,10 @@ impl Hmac<'_> {
 }
 
 impl<'a> hil::digest::DigestData<'a, 32> for Hmac<'a> {
+    fn set_data_client(&'a self, client: &'a dyn hil::digest::ClientData<32>) {
+        self.client_data.set(client);
+    }
+
     fn add_data(
         &self,
         data: LeasableBuffer<'static, u8>,
@@ -322,6 +336,10 @@ impl<'a> hil::digest::DigestData<'a, 32> for Hmac<'a> {
 }
 
 impl<'a> hil::digest::DigestHash<'a, 32> for Hmac<'a> {
+    fn set_hash_client(&'a self, client: &'a dyn hil::digest::ClientHash<32>) {
+        self.client_hash.set(client);
+    }
+
     fn run(
         &'a self,
         digest: &'static mut [u8; 32],
@@ -344,6 +362,10 @@ impl<'a> hil::digest::DigestHash<'a, 32> for Hmac<'a> {
 }
 
 impl<'a> hil::digest::DigestVerify<'a, 32> for Hmac<'a> {
+    fn set_verify_client(&'a self, client: &'a dyn hil::digest::ClientVerify<32>) {
+        self.client_verify.set(client);
+    }
+
     fn verify(
         &'a self,
         compare: &'static mut [u8; 32],
@@ -356,7 +378,9 @@ impl<'a> hil::digest::DigestVerify<'a, 32> for Hmac<'a> {
 
 impl<'a> hil::digest::Digest<'a, 32> for Hmac<'a> {
     fn set_client(&'a self, client: &'a dyn digest::Client<32>) {
-        self.client.set(client);
+        self.client_data.set(client);
+        self.client_hash.set(client);
+        self.client_verify.set(client);
     }
 }
 
