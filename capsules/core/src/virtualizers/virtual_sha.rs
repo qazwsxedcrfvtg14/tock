@@ -21,7 +21,9 @@ use crate::virtualizers::virtual_digest::{Mode, Operation};
 pub struct VirtualMuxSha<'a, A: digest::Digest<'a, L>, const L: usize> {
     mux: &'a MuxSha<'a, A, L>,
     next: ListLink<'a, VirtualMuxSha<'a, A, L>>,
-    client: OptionalCell<&'a dyn digest::Client<L>>,
+    client_data: OptionalCell<&'a dyn digest::ClientData<L>>,
+    client_hash: OptionalCell<&'a dyn digest::ClientHash<L>>,
+    client_verify: OptionalCell<&'a dyn digest::ClientVerify<L>>,
     data: OptionalCell<LeasableBufferDynamic<'static, u8>>,
     data_len: Cell<usize>,
     digest: TakeCell<'static, [u8; L]>,
@@ -46,7 +48,9 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> VirtualMuxSha<'a, A, L> {
         VirtualMuxSha {
             mux: mux_sha,
             next: ListLink::empty(),
-            client: OptionalCell::empty(),
+            client_data: OptionalCell::empty(),
+            client_hash: OptionalCell::empty(),
+            client_verify: OptionalCell::empty(),
             data: OptionalCell::empty(),
             data_len: Cell::new(0),
             digest: TakeCell::empty(),
@@ -60,6 +64,10 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> VirtualMuxSha<'a, A, L> {
 impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestData<'a, L>
     for VirtualMuxSha<'a, A, L>
 {
+    fn set_data_client(&'a self, client: &'a dyn ClientData<L>) {
+        self.client_data.set(client);
+    }
+
     /// Add data to the sha IP.
     /// All data passed in is fed to the SHA hardware block.
     /// Returns the number of bytes written on success
@@ -122,6 +130,10 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestData<'a, L>
 impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestHash<'a, L>
     for VirtualMuxSha<'a, A, L>
 {
+    fn set_hash_client(&'a self, client: &'a dyn ClientHash<L>) {
+        self.client_hash.set(client);
+    }
+
     /// Request the hardware block to generate a SHA
     /// This doesn't return anything, instead the client needs to have
     /// set a `hash_done` handler.
@@ -148,6 +160,10 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestHash<'a, L>
 impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestVerify<'a, L>
     for VirtualMuxSha<'a, A, L>
 {
+    fn set_verify_client(&'a self, client: &'a dyn ClientVerify<L>) {
+        self.client_verify.set(client);
+    }
+
     fn verify(
         &self,
         compare: &'static mut [u8; L],
@@ -190,7 +206,7 @@ impl<
     > digest::ClientData<L> for VirtualMuxSha<'a, A, L>
 {
     fn add_data_done(&self, result: Result<(), ErrorCode>, data: LeasableBuffer<'static, u8>) {
-        self.client
+        self.client_data
             .map(move |client| client.add_data_done(result, data));
         self.mux.do_next_op();
     }
@@ -200,7 +216,7 @@ impl<
         result: Result<(), ErrorCode>,
         data: LeasableMutableBuffer<'static, u8>,
     ) {
-        self.client
+        self.client_data
             .map(move |client| client.add_mut_data_done(result, data));
         self.mux.do_next_op();
     }
@@ -213,7 +229,7 @@ impl<
     > digest::ClientHash<L> for VirtualMuxSha<'a, A, L>
 {
     fn hash_done(&self, result: Result<(), ErrorCode>, digest: &'static mut [u8; L]) {
-        self.client
+        self.client_hash
             .map(move |client| client.hash_done(result, digest));
 
         // Forcefully clear the data to allow other apps to use the HMAC
@@ -229,7 +245,7 @@ impl<
     > digest::ClientVerify<L> for VirtualMuxSha<'a, A, L>
 {
     fn verification_done(&self, result: Result<bool, ErrorCode>, digest: &'static mut [u8; L]) {
-        self.client
+        self.client_verify
             .map(move |client| client.verification_done(result, digest));
 
         // Forcefully clear the data to allow other apps to use the HMAC

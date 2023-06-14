@@ -95,6 +95,10 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> VirtualMuxDigest<'a, A, L> {
 impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestData<'a, L>
     for VirtualMuxDigest<'a, A, L>
 {
+    fn set_data_client(&'a self, _client: &'a dyn ClientData<L>) {
+        unimplemented!()
+    }
+
     /// Add data to the digest IP.
     /// All data passed in is fed to the Digest hardware block.
     /// Returns the number of bytes written on success
@@ -153,6 +157,10 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestData<'a, L>
 impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestHash<'a, L>
     for VirtualMuxDigest<'a, A, L>
 {
+    fn set_hash_client(&'a self, _client: &'a dyn ClientHash<L>) {
+        unimplemented!()
+    }
+
     /// Request the hardware block to generate a Digest
     /// This doesn't return anything, instead the client needs to have
     /// set a `hash_done` handler.
@@ -180,6 +188,10 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestHash<'a, L>
 impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestVerify<'a, L>
     for VirtualMuxDigest<'a, A, L>
 {
+    fn set_verify_client(&'a self, _client: &'a dyn ClientVerify<L>) {
+        unimplemented!()
+    }
+
     fn verify(
         &self,
         compare: &'static mut [u8; L],
