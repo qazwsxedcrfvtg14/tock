@@ -72,6 +72,7 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestData<'a, L>
     ) -> Result<(), (ErrorCode, LeasableBuffer<'static, u8>)> {
         // Check if any mux is enabled. If it isn't we enable it for us.
         if self.mux.running_id.get() == self.id {
+            self.mux.hmac.set_client(self);
             self.mux.hmac.add_data(data)
         } else {
             // Another app is already running, queue this app as long as we
@@ -94,6 +95,7 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestData<'a, L>
     ) -> Result<(), (ErrorCode, LeasableMutableBuffer<'static, u8>)> {
         // Check if any mux is enabled. If it isn't we enable it for us.
         if self.mux.running_id.get() == self.id {
+            self.mux.hmac.set_client(self);
             self.mux.hmac.add_mut_data(data)
         } else {
             // Another app is already running, queue this app as long as we
@@ -130,6 +132,7 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestHash<'a, L>
     ) -> Result<(), (ErrorCode, &'static mut [u8; L])> {
         // Check if any mux is enabled. If it isn't we enable it for us.
         if self.mux.running_id.get() == self.id {
+            self.mux.hmac.set_client(self);
             self.mux.hmac.run(digest)
         } else {
             // Another app is already running, queue this app as long as we
@@ -153,6 +156,7 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestVerify<'a, L>
     ) -> Result<(), (ErrorCode, &'static mut [u8; L])> {
         // Check if any mux is enabled
         if self.mux.running_id.get() == self.id {
+            self.mux.hmac.set_client(self);
             self.mux.hmac.verify(compare)
         } else {
             // Another app is already running, queue this app as long as we
@@ -171,14 +175,14 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::DigestVerify<'a, L>
 impl<'a, A: digest::Digest<'a, L>, const L: usize> digest::Digest<'a, L>
     for VirtualMuxHmac<'a, A, L>
 {
-    /// Set the client instance which will receive `add_data_done()` and
-    /// `hash_done()` callbacks
+    /// Set the client instance which will receive `add_data_done()`,
+    /// `hash_done()`, and `verify_done()` callbacks
     fn set_client(&'a self, client: &'a dyn digest::Client<L>) {
         let node = self.mux.users.iter().find(|node| node.id == self.id);
         if node.is_none() {
             self.mux.users.push_head(self);
         }
-        self.mux.hmac.set_client(client);
+        self.client.set(client);
     }
 }
 
@@ -320,6 +324,8 @@ impl<
         mnode.map(|node| {
             self.running.set(true);
             self.running_id.set(node.id);
+
+            self.hmac.set_client(node);
 
             match node.mode.get() {
                 Mode::None => {}

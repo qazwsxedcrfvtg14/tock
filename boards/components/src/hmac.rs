@@ -29,6 +29,7 @@ use kernel::capabilities;
 use kernel::component::Component;
 use kernel::create_capability;
 use kernel::hil::digest;
+use kernel::hil::digest::Digest;
 
 #[macro_export]
 macro_rules! hmac_mux_component_static {
@@ -139,6 +140,8 @@ impl<
             dest_buffer,
             self.board_kernel.create_grant(self.driver_num, &grant_cap),
         ));
+
+        virtual_hmac_user.set_client(hmac);
 
         hmac
     }
