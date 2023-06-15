@@ -722,7 +722,6 @@ pub unsafe fn main() {
             capsules_extra::tickv::TicKVKeyType,
         ),
     );
-    tickv.set_client(kv_store);
 
     // Get permissions we can use.
     let superuser_storage_capability = create_capability!(capabilities::SuperuserStorageCapability);
@@ -812,25 +811,13 @@ pub unsafe fn main() {
     let kv_key = static_init!([u8; 64], [0; 64]);
     let kv_val = static_init!([u8; 64], [0; 64]);
 
-    kv_val[0] = 0xa2;
-    kv_val[1] = 0xa4;
-    kv_val[2] = 0xa6;
-    kv_val[3] = 0xa6;
-    kv_val[4] = 0xa8;
-    kv_val[5] = 0xaa;
-    kv_val[6] = 0xac;
-    kv_val[7] = 0xae;
-    kv_val[8] = 0xc2;
-    kv_val[9] = 0xc4;
-    kv_val[10] = 0xc6;
-    kv_val[11] = 0xc6;
-    kv_val[12] = 0xc8;
-    kv_val[13] = 0xca;
-    kv_val[14] = 0xcc;
-    kv_val[15] = 0xce;
+    kv_val[0] = 0xbe;
+    kv_val[1] = 0xad;
+    kv_val[2] = 0xca;
+    kv_val[3] = 0xb5;
 
-    let key_name: &[u8] = b"mythirdkey";
-    kv_key[0..10].clone_from_slice(&key_name);
+    let key_name: &[u8] = b"keyfour";
+    kv_key[0..7].clone_from_slice(&key_name);
 
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
         .finalize(components::round_robin_component_static!(NUM_PROCS));
