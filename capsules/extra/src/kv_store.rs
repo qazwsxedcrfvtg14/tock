@@ -33,7 +33,6 @@
 //!    hil::flash
 //! ```
 
-use core::cell::Cell;
 use kernel::collections::list::{List, ListLink, ListNode};
 use kernel::hil::kv_system::{self, KVSystem};
 use kernel::storage_permissions::StoragePermissions;
@@ -195,6 +194,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
 }
 
 /// Keep track of whether the kv is busy with doing a cleanup.
+#[derive(PartialEq)]
 enum StateCleanup {
     CleanupRequested,
     CleanupInProgress,
@@ -228,7 +228,7 @@ impl<'a, K: KVSystem<'a> + KVSystem<'a, K = T>, T: 'static + kv_system::KeyType>
     }
 
     fn do_next_op(&self) {
-        if self.inflight.is_some() || self.cleanup.get() == Some(StateCleanup::CleanupInProgress) {
+        if self.inflight.is_some() || self.cleanup.contains(&StateCleanup::CleanupInProgress) {
             return;
         }
 
@@ -280,8 +280,7 @@ impl<'a, K: KVSystem<'a> + KVSystem<'a, K = T>, T: 'static + kv_system::KeyType>
 
         // If we have nothing scheduled, and we have recently done a delete, run
         // a garbage collect.
-        if ret == Err(ErrorCode::NODEVICE)
-            && self.cleanup.get() == Some(StateCleanup::CleanupRequested)
+        if ret == Err(ErrorCode::NODEVICE) && self.cleanup.contains(&StateCleanup::CleanupRequested)
         {
             self.cleanup.set(StateCleanup::CleanupInProgress);
             // We have no way to report this error, and even if we could, what
