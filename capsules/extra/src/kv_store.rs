@@ -194,11 +194,17 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
     }
 }
 
+/// Keep track of whether the kv is busy with doing a cleanup.
+enum StateCleanup {
+    CleanupRequested,
+    CleanupInProgress,
+}
+
 pub struct MuxKVStore<'a, K: KVSystem<'a> + KVSystem<'a, K = T>, T: 'static + kv_system::KeyType> {
     kv: &'a K,
     hashed_key: TakeCell<'static, T>,
     header_value: TakeCell<'static, [u8]>,
-    perform_cleanup: Cell<bool>,
+    cleanup: OptionalCell<StateCleanup>,
     users: List<'a, KVStore<'a, K, T>>,
     inflight: OptionalCell<&'a KVStore<'a, K, T>>,
 }
@@ -216,13 +222,13 @@ impl<'a, K: KVSystem<'a> + KVSystem<'a, K = T>, T: 'static + kv_system::KeyType>
             hashed_key: TakeCell::new(key),
             header_value: TakeCell::new(header_value),
             inflight: OptionalCell::empty(),
-            perform_cleanup: Cell::new(false),
+            cleanup: OptionalCell::empty(),
             users: List::new(),
         }
     }
 
     fn do_next_op(&self) {
-        if self.inflight.is_some() {
+        if self.inflight.is_some() || self.cleanup.get() == Some(StateCleanup::CleanupInProgress) {
             return;
         }
 
@@ -272,8 +278,12 @@ impl<'a, K: KVSystem<'a> + KVSystem<'a, K = T>, T: 'static + kv_system::KeyType>
             Ok(())
         });
 
-        // If we have nothing scheduled, run a garbage collect
-        if ret == Err(ErrorCode::NODEVICE) && self.perform_cleanup.get() {
+        // If we have nothing scheduled, and we have recently done a delete, run
+        // a garbage collect.
+        if ret == Err(ErrorCode::NODEVICE)
+            && self.cleanup.get() == Some(StateCleanup::CleanupRequested)
+        {
+            self.cleanup.set(StateCleanup::CleanupInProgress);
             // We have no way to report this error, and even if we could, what
             // would a user do?
             let _ = self.kv.garbage_collect();
@@ -531,12 +541,12 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> kv_system::Client<T>
             });
         });
 
-        self.perform_cleanup.set(false);
+        self.cleanup.set(StateCleanup::CleanupRequested);
         self.do_next_op();
     }
 
     fn garbage_collect_complete(&self, _result: Result<(), ErrorCode>) {
-        self.perform_cleanup.set(false);
+        self.cleanup.clear();
         self.do_next_op();
     }
 }
