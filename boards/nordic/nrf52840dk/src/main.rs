@@ -81,7 +81,6 @@ use capsules_extra::net::ipv6::ip_utils::IPAddr;
 use kernel::component::Component;
 use kernel::deferred_call::DeferredCallClient;
 use kernel::hil::i2c::{I2CMaster, I2CSlave};
-use kernel::hil::kv_system::KVSystem;
 use kernel::hil::led::LedLow;
 use kernel::hil::symmetric_encryption::AES128;
 use kernel::hil::time::Counter;
@@ -218,24 +217,6 @@ pub struct Platform {
             'static,
             nrf52840::spi::SPIM,
         >,
-    >,
-    kv_store: &'static capsules_extra::kv_store::KVStore<
-        'static,
-        capsules_extra::tickv::TicKVStore<
-            'static,
-            capsules_extra::mx25r6435f::MX25R6435F<
-                'static,
-                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
-                    'static,
-                    nrf52840::spi::SPIM,
-                >,
-                nrf52840::gpio::GPIOPin<'static>,
-                VirtualMuxAlarm<'static, nrf52840::rtc::Rtc<'static>>,
-            >,
-            capsules_extra::sip_hash::SipHasher24<'static>,
-            4096,
-        >,
-        [u8; 8],
     >,
     kv_driver: &'static capsules_extra::kv_driver::KVSystemDriver<
         'static,
@@ -883,7 +864,6 @@ pub unsafe fn main() {
         ),
         i2c_master_slave,
         spi_controller,
-        kv_store,
         kv_driver,
         scheduler,
         systick: cortexm4::systick::SysTick::new_with_calibration(64000000),
