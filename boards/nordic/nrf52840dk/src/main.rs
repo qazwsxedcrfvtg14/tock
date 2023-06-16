@@ -237,6 +237,24 @@ pub struct Platform {
         >,
         [u8; 8],
     >,
+    kv_driver: &'static capsules_extra::kv_driver::KVSystemDriver<
+        'static,
+        capsules_extra::tickv::TicKVStore<
+            'static,
+            capsules_extra::mx25r6435f::MX25R6435F<
+                'static,
+                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+                    'static,
+                    nrf52840::spi::SPIM,
+                >,
+                nrf52840::gpio::GPIOPin<'static>,
+                VirtualMuxAlarm<'static, nrf52840::rtc::Rtc<'static>>,
+            >,
+            capsules_extra::sip_hash::SipHasher24<'static>,
+            4096,
+        >,
+        [u8; 8],
+    >,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
 }
@@ -264,6 +282,7 @@ impl SyscallDriverLookup for Platform {
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             capsules_core::i2c_master_slave_driver::DRIVER_NUM => f(Some(self.i2c_master_slave)),
             capsules_core::spi_controller::DRIVER_NUM => f(Some(self.spi_controller)),
+            capsules_extra::kv_driver::DRIVER_NUM => f(Some(self.kv_driver)),
             _ => f(None),
         }
     }
@@ -723,6 +742,27 @@ pub unsafe fn main() {
         ),
     );
 
+    let kv_driver = components::kv_system::KVDriverComponent::new(
+        kv_store,
+        board_kernel,
+        capsules_extra::kv_driver::DRIVER_NUM,
+    )
+    .finalize(components::kv_driver_component_static!(
+        capsules_extra::tickv::TicKVStore<
+            capsules_extra::mx25r6435f::MX25R6435F<
+                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+                    'static,
+                    nrf52840::spi::SPIM,
+                >,
+                nrf52840::gpio::GPIOPin,
+                VirtualMuxAlarm<'static, nrf52840::rtc::Rtc>,
+            >,
+            capsules_extra::sip_hash::SipHasher24<'static>,
+            SIZE,
+        >,
+        capsules_extra::tickv::TicKVKeyType,
+    ));
+
     // Get permissions we can use.
     let superuser_storage_capability = create_capability!(capabilities::SuperuserStorageCapability);
     let kv_permissions = kernel::storage_permissions::StoragePermissions::new_kernel_permissions(
@@ -844,6 +884,7 @@ pub unsafe fn main() {
         i2c_master_slave,
         spi_controller,
         kv_store,
+        kv_driver,
         scheduler,
         systick: cortexm4::systick::SysTick::new_with_calibration(64000000),
     };
