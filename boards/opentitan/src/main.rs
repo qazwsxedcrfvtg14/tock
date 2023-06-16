@@ -28,7 +28,6 @@ use kernel::hil::digest::Digest;
 use kernel::hil::entropy::Entropy32;
 use kernel::hil::hasher::Hasher;
 use kernel::hil::i2c::I2CMaster;
-use kernel::hil::kv_system::KVSystem;
 use kernel::hil::led::LedHigh;
 use kernel::hil::rng::Rng;
 use kernel::hil::symmetric_encryption::AES128;
@@ -568,7 +567,6 @@ unsafe fn setup() -> (
             capsules_extra::tickv::TicKVKeyType,
         ),
     );
-    tickv.set_client(kv_store);
 
     let kv_driver = components::kv_system::KVDriverComponent::new(
         kv_store,
